@@ -1,0 +1,1487 @@
+@page "/"
+@page "/game"
+@rendermode InteractiveServer
+@inject global::SpinTheBottle.Services.IBettingEngineService BettingEngine
+@inject global::SpinTheBottle.Services.IFirebaseService FirebaseService
+@inject global::SpinTheBottle.Services.CustomAuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject ILogger<SpinTheBottle> Logger
+@implements IAsyncDisposable
+
+<PageTitle>Spin the Bottle | Premium Mobile Casino</PageTitle>
+
+<div class="game-wrapper">
+    <!-- Top Bar: Status, Balance, Sound & Info -->
+    <header class="top-nav-bar">
+        <div class="brand-tag">
+            <span class="brand-icon">🍾</span>
+            <div class="brand-text">
+                <span class="brand-title">SPIN THE BOTTLE</span>
+                <span class="brand-sub">PROVABLY FAIR CASINO</span>
+            </div>
+        </div>
+
+        <div class="nav-actions">
+            <!-- Audio Toggle -->
+            <button class="nav-btn icon-btn" @onclick="ToggleAudio" title="Toggle Sound" aria-label="Toggle Sound">
+                @if (isAudioOn)
+                {
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    </svg>
+                }
+                else
+                {
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <line x1="23" y1="9" x2="17" y2="15"></line>
+                        <line x1="17" y1="9" x2="23" y2="15"></line>
+                    </svg>
+                }
+            </button>
+
+            <!-- Info / History Drawer Button -->
+            <button class="nav-btn icon-btn" @onclick="() => showFairnessModal = true" title="Fairness & History" aria-label="Fairness and History">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+            </button>
+
+            <!-- User Auth / Balance Chip -->
+            @if (CurrentUser != null)
+            {
+                @if (!CurrentUser.IsBonusRedeemed)
+                {
+                    <button class="bonus-claim-top-btn animate-pop" @onclick="OpenShareRedeemModal" title="Claim your R50 Bonus">
+                        <span class="gift-icon">🎁</span>
+                        <span>Redeem R50</span>
+                    </button>
+                }
+                <div class="user-chip" @onclick="() => showUserMenu = !showUserMenu">
+                    <div class="balance-display @(balancePulseClass)">
+                        <span class="currency-symbol">R</span>
+                        <span class="balance-amount">@CurrentUser.Balance.ToString("F2")</span>
+                    </div>
+                    <div class="user-avatar" title="@CurrentUser.Email">
+                        @CurrentUser.Email[..1].ToUpper()
+                    </div>
+                </div>
+            }
+            else
+            {
+                <button class="login-cta-btn" @onclick="OpenAuthModal">
+                    Log In
+                </button>
+            }
+        </div>
+    </header>
+
+    <!-- User Profile Dropdown Menu -->
+    @if (showUserMenu && CurrentUser != null)
+    {
+        <div class="menu-backdrop" @onclick="() => showUserMenu = false"></div>
+        <div class="user-dropdown-panel animate-fade-in">
+            <div class="dropdown-header">
+                <span class="user-email-text">@CurrentUser.Email</span>
+                <span class="user-badge">Verified Player</span>
+            </div>
+            <div class="dropdown-balance">
+                <span class="label">Total Balance:</span>
+                <span class="amount">R @CurrentUser.Balance.ToString("F2")</span>
+            </div>
+            <div class="dropdown-actions">
+                @if (!CurrentUser.IsBonusRedeemed)
+                {
+                    <button class="btn-dropdown highlight-gold" @onclick="() => { showUserMenu = false; OpenShareRedeemModal(); }">
+                        🎁 Share & Redeem R50.00
+                    </button>
+                }
+                <button class="btn-dropdown secondary" @onclick="() => { showFairnessModal = true; showUserMenu = false; }">
+                    Game History & Fairness
+                </button>
+                <button class="btn-dropdown danger" @onclick="HandleLogout">
+                    Sign Out
+                </button>
+            </div>
+        </div>
+    }
+
+    <!-- Guest Trial Header Ribbon (If Guest) -->
+    @if (CurrentUser == null)
+    {
+        <div class="guest-ribbon animate-slide-down">
+            <div class="ribbon-glow"></div>
+            <div class="ribbon-content">
+                <span class="badge-free">1 FREE TRIAL</span>
+                <span class="ribbon-text">Pick your side & win a guaranteed <strong>R50.00</strong> bonus!</span>
+            </div>
+        </div>
+    }
+    else if (!CurrentUser.IsBonusRedeemed)
+    {
+        <!-- Pending Bonus Ribbon for Registered User -->
+        <div class="pending-bonus-ribbon animate-slide-down" @onclick="OpenShareRedeemModal">
+            <div class="ribbon-glow gold"></div>
+            <div class="ribbon-content">
+                <span class="badge-free gold">🎁 R50.00 BONUS PENDING</span>
+                <span class="ribbon-text">Share your experience with 2 contacts to claim into wallet!</span>
+                <span class="ribbon-cta">REDEEM NOW →</span>
+            </div>
+        </div>
+    }
+
+    <!-- Center Arena: Circular Board & Realistic SVG Bottle -->
+    <main class="game-arena-section">
+        <div class="game-canvas-area">
+            <!-- Circular Wheel Sectors -->
+            <div class="wheel-outer-ring">
+                <!-- North Hemisphere Glow Sector -->
+                <div class="hemisphere north-hemisphere @(selectedSide == BetSide.North ? "active-selected" : "") @(winningSectorGlow == BetSide.North ? "winner-pulse" : "")"
+                     @onclick="() => SelectSide(BetSide.North)">
+                    <div class="hemisphere-backdrop north-bg"></div>
+                    <div class="sector-content">
+                        <div class="sector-compass">
+                            <span class="bearing">N · 000°</span>
+                        </div>
+                        <div class="sector-label">
+                            <span class="label-heading">NORTH</span>
+                            <span class="label-payout">1.96x</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dividing Horizon Line (90° - 270°) with Buffer Zones -->
+                <div class="horizon-divider">
+                    <div class="horizon-line"></div>
+                    <div class="marker west-marker" title="West boundary (270°)">
+                        <span class="marker-dot"></span>
+                        <span class="marker-deg">270°</span>
+                    </div>
+                    <div class="marker east-marker" title="East boundary (90°)">
+                        <span class="marker-dot"></span>
+                        <span class="marker-deg">90°</span>
+                    </div>
+                </div>
+
+                <!-- South Hemisphere Glow Sector -->
+                <div class="hemisphere south-hemisphere @(selectedSide == BetSide.South ? "active-selected" : "") @(winningSectorGlow == BetSide.South ? "winner-pulse" : "")"
+                     @onclick="() => SelectSide(BetSide.South)">
+                    <div class="hemisphere-backdrop south-bg"></div>
+                    <div class="sector-content">
+                        <div class="sector-label">
+                            <span class="label-heading">SOUTH</span>
+                            <span class="label-payout">1.96x</span>
+                        </div>
+                        <div class="sector-compass">
+                            <span class="bearing">S · 180°</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Realistic High-Fidelity SVG Glass Bottle (Hardware-Accelerated Rotation) -->
+                <div id="bottle-rotor" class="bottle-rotor">
+                    <svg class="bottle-svg" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <!-- Drop Shadow for realistic depth above the board -->
+                            <filter id="bottle-depth-shadow" x="-30%" y="-30%" width="160%" height="160%">
+                                <feDropShadow dx="8" dy="14" stdDeviation="9" flood-color="#000000" flood-opacity="0.85" />
+                            </filter>
+
+                            <!-- Metallic Gold Crown Cap -->
+                            <linearGradient id="gold-cap-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#9a7217" />
+                                <stop offset="25%" stop-color="#ffd56b" />
+                                <stop offset="50%" stop-color="#fff8db" />
+                                <stop offset="75%" stop-color="#e0b135" />
+                                <stop offset="100%" stop-color="#7a5405" />
+                            </linearGradient>
+
+                            <!-- Glass Body Emerald / Crystal Gradient -->
+                            <linearGradient id="glass-body-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#073322" stop-opacity="0.95" />
+                                <stop offset="15%" stop-color="#0e6945" stop-opacity="0.85" />
+                                <stop offset="35%" stop-color="#19a36d" stop-opacity="0.75" />
+                                <stop offset="50%" stop-color="#0a4d33" stop-opacity="0.85" />
+                                <stop offset="85%" stop-color="#0e6945" stop-opacity="0.85" />
+                                <stop offset="100%" stop-color="#05281a" stop-opacity="0.95" />
+                            </linearGradient>
+
+                            <!-- Specular Highlight Streak for Glass Realism -->
+                            <linearGradient id="specular-highlight" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#ffffff" stop-opacity="0" />
+                                <stop offset="50%" stop-color="#ffffff" stop-opacity="0.65" />
+                                <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+                            </linearGradient>
+
+                            <!-- Pivot Pin Radial Gradient -->
+                            <radialGradient id="pivot-metal-grad" cx="40%" cy="40%" r="60%">
+                                <stop offset="0%" stop-color="#ffffff" />
+                                <stop offset="45%" stop-color="#b8c2cc" />
+                                <stop offset="80%" stop-color="#4b5563" />
+                                <stop offset="100%" stop-color="#111827" />
+                            </radialGradient>
+                        </defs>
+
+                        <!-- Group with drop shadow centered at (160, 160) -->
+                        <g filter="url(#bottle-depth-shadow)">
+                            <!-- Main Glass Bottle Silhouette -->
+                            <!-- Coordinates: Center (160, 160), Total height 220px (from y=50 to y=270) -->
+
+                            <!-- Outer Glass Body & Neck Contour -->
+                            <path d="
+                                M 150 64
+                                L 170 64
+                                L 170 108
+                                Q 170 135 188 148
+                                L 188 256
+                                Q 188 268 178 270
+                                L 142 270
+                                Q 132 268 132 256
+                                L 132 148
+                                Q 150 135 150 108
+                                Z"
+                                  fill="url(#glass-body-grad)"
+                                  stroke="#34d399"
+                                  stroke-opacity="0.4"
+                                  stroke-width="1.5" />
+
+                            <!-- Bottle Base Concave Punt Indentation (Visual South differentiation) -->
+                            <path d="M 144 270 Q 160 252 176 270 Z" fill="#031a10" opacity="0.8" />
+
+                            <!-- Glass Liquid Content Interior Silhouette -->
+                            <path d="
+                                M 134 165
+                                L 186 165
+                                L 186 255
+                                Q 186 266 176 268
+                                L 144 268
+                                Q 134 266 134 255
+                                Z"
+                                  fill="#064e3b"
+                                  opacity="0.75" />
+
+                            <!-- Glass Reflection / Specular Highlight Left Streak -->
+                            <path d="
+                                M 136 150
+                                L 140 150
+                                L 140 254
+                                L 136 254
+                                Z"
+                                  fill="url(#specular-highlight)" />
+
+                            <!-- Glass Reflection / Specular Highlight Neck -->
+                            <path d="
+                                M 153 72
+                                L 156 72
+                                L 156 106
+                                L 153 106
+                                Z"
+                                  fill="#ffffff"
+                                  opacity="0.55" />
+
+                            <!-- Bottle Cap Neck Ring Ridge (Collar) -->
+                            <rect x="148" y="63" width="24" height="4" rx="2" fill="url(#gold-cap-grad)" stroke="#78350f" stroke-width="0.5" />
+
+                            <!-- CROWN CAP (Scoring Tip - Points Directly to Target Hemisphere) -->
+                            <!-- Realistic fluted ridges on cap crown -->
+                            <rect x="149" y="48" width="22" height="15" rx="3" fill="url(#gold-cap-grad)" stroke="#b45309" stroke-width="0.7" />
+                            <path d="M 149 53 L 171 53 M 149 58 L 171 58" stroke="#78350f" stroke-width="0.6" opacity="0.6" />
+
+                            <!-- Glowing Tip Indicator Triangle on Crown Cap -->
+                            <polygon points="160,38 165,46 155,46" fill="#facc15" stroke="#ca8a04" stroke-width="1" />
+                            <circle cx="160" cy="42" r="3" fill="#fef08a" opacity="0.9" />
+
+                            <!-- Center Pivot Pin (Center of Board: 160, 160) -->
+                            <circle cx="160" cy="160" r="16" fill="#000000" opacity="0.4" />
+                            <circle cx="160" cy="160" r="12" fill="url(#pivot-metal-grad)" stroke="#374151" stroke-width="1.5" />
+                            <circle cx="160" cy="160" r="5" fill="#1f2937" />
+                            <circle cx="158" cy="158" r="2" fill="#ffffff" opacity="0.8" />
+                        </g>
+                    </svg>
+                </div>
+
+                <!-- Animated Winning Particle Overlay -->
+                @if (lastSpinResult != null && !isSpinning && lastSpinResult.IsWin)
+                {
+                    <div class="win-celebration-burst animate-pop">
+                        <div class="win-ring"></div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Outcome Callout Banner -->
+        @if (!isSpinning && lastSpinResult != null)
+        {
+            <div class="outcome-badge-container animate-bounce-in">
+                @if (lastSpinResult.IsWin)
+                {
+                    <div class="result-badge win">
+                        <span class="icon">✨</span>
+                        <div class="text">
+                            <strong>@(lastSpinResult.WinningSide.ToString().ToUpper()) WINS!</strong>
+                            <span>+R @lastSpinResult.Payout.ToString("F2") Won</span>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="result-badge loss">
+                        <span class="icon">❌</span>
+                        <div class="text">
+                            <strong>@(lastSpinResult.WinningSide.ToString().ToUpper()) LANDED</strong>
+                            <span>Better luck next spin!</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </main>
+
+    <!-- Bottom Action Sheet: Side Selector, Betting Controls, Wager Chips, Spin Button -->
+    <footer class="bottom-action-sheet">
+        <!-- Side Selector Toggle -->
+        <div class="side-selector-row">
+            <button class="side-btn north-btn @(selectedSide == BetSide.North ? "selected" : "")"
+                    @onclick="() => SelectSide(BetSide.North)"
+                    disabled="@isSpinning">
+                <div class="side-btn-inner">
+                    <span class="side-icon">▲</span>
+                    <span class="side-name">NORTH</span>
+                    <span class="side-mult">1.96x</span>
+                </div>
+            </button>
+
+            <div class="vs-divider">VS</div>
+
+            <button class="side-btn south-btn @(selectedSide == BetSide.South ? "selected" : "")"
+                    @onclick="() => SelectSide(BetSide.South)"
+                    disabled="@isSpinning">
+                <div class="side-btn-inner">
+                    <span class="side-icon">▼</span>
+                    <span class="side-name">SOUTH</span>
+                    <span class="side-mult">1.96x</span>
+                </div>
+            </button>
+        </div>
+
+        <!-- Wager Controls & Quick Chips (If Authenticated or Has Balance) -->
+        @if (CurrentUser != null)
+        {
+            <div class="wager-controls-container">
+                <div class="wager-header-row">
+                    <span class="wager-label">WAGER AMOUNT</span>
+                    <span class="wager-payout-preview">
+                        Potential Payout: <strong>R @((currentWager * BettingEngine.Multiplier).ToString("F2"))</strong>
+                    </span>
+                </div>
+
+                <div class="wager-input-row">
+                    <button class="btn-step" @onclick="() => AdjustWager(-5m)" disabled="@(isSpinning || currentWager <= 5m)">-5</button>
+                    <button class="btn-step" @onclick="() => AdjustWager(-1m)" disabled="@(isSpinning || currentWager <= 1m)">-1</button>
+
+                    <div class="wager-field-wrapper">
+                        <span class="currency-prefix">R</span>
+                        <input type="number"
+                               class="wager-input"
+                               min="1"
+                               max="@BettingEngine.MaxBet"
+                               step="1"
+                               value="@currentWager"
+                               @onchange="OnWagerInputChanged"
+                               disabled="@isSpinning" />
+                    </div>
+
+                    <button class="btn-step" @onclick="() => AdjustWager(1m)" disabled="@(isSpinning || currentWager >= BettingEngine.MaxBet)">+1</button>
+                    <button class="btn-step" @onclick="() => AdjustWager(5m)" disabled="@(isSpinning || currentWager + 5m > BettingEngine.MaxBet)">+5</button>
+                </div>
+
+                <!-- Quick Preset Chips -->
+                <div class="chips-row">
+                    <button class="chip-btn @(currentWager == 5m ? "active" : "")" @onclick="() => SetWager(5m)" disabled="@isSpinning">R5</button>
+                    <button class="chip-btn @(currentWager == 10m ? "active" : "")" @onclick="() => SetWager(10m)" disabled="@isSpinning">R10</button>
+                    <button class="chip-btn @(currentWager == 25m ? "active" : "")" @onclick="() => SetWager(25m)" disabled="@isSpinning">R25</button>
+                    <button class="chip-btn @(currentWager == 50m ? "active" : "")" @onclick="() => SetWager(50m)" disabled="@isSpinning">R50</button>
+                    <button class="chip-btn @(currentWager == CurrentUser.Balance && CurrentUser.Balance > 0 ? "active" : "")"
+                            @onclick="SetMaxWager"
+                            disabled="@(isSpinning || CurrentUser.Balance <= 0)">
+                        MAX
+                    </button>
+                </div>
+            </div>
+        }
+
+        <!-- Primary Spin Button -->
+        <div class="spin-action-row">
+            @if (CurrentUser == null)
+            {
+                <!-- First-Time Guest Trial Spin Button -->
+                <button class="main-spin-btn trial-spin-btn @(isSpinning ? "spinning" : "")"
+                        @onclick="HandleSpinClicked"
+                        disabled="@(isSpinning || hasUsedGuestTrial)">
+                    <div class="btn-content">
+                        @if (isSpinning)
+                        {
+                            <span class="spinner-icon">🔄</span>
+                            <span class="spin-text">SPINNING BOTTLE...</span>
+                        }
+                        else if (hasUsedGuestTrial)
+                        {
+                            <span class="spin-text">CLAIM BONUS TO PLAY AGAIN</span>
+                        }
+                        else
+                        {
+                            <span class="badge-pill">100% FREE WIN</span>
+                            <span class="spin-text">FREE TRIAL SPIN</span>
+                            <span class="spin-sub">Win R50.00 instantly</span>
+                        }
+                    </div>
+                </button>
+            }
+            else
+            {
+                <!-- Real Wager Spin Button -->
+                <button class="main-spin-btn real-spin-btn @(isSpinning ? "spinning" : "") @(CurrentUser.Balance < currentWager ? "insufficient" : "")"
+                        @onclick="HandleSpinClicked"
+                        disabled="@(isSpinning || CurrentUser.Balance < currentWager || currentWager < BettingEngine.MinBet)">
+                    <div class="btn-content">
+                        @if (isSpinning)
+                        {
+                            <span class="spinner-icon">🔄</span>
+                            <span class="spin-text">SPINNING...</span>
+                        }
+                        else if (CurrentUser.Balance < currentWager)
+                        {
+                            <span class="spin-text">INSUFFICIENT BALANCE</span>
+                            <span class="spin-sub">Balance: R @CurrentUser.Balance.ToString("F2")</span>
+                        }
+                        else
+                        {
+                            <span class="spin-text">SPIN BOTTLE</span>
+                            <span class="spin-sub">Wager: R @currentWager.ToString("F2") on @selectedSide.ToString().ToUpper()</span>
+                        }
+                    </div>
+                </button>
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(statusErrorMessage))
+        {
+            <div class="status-error-toast animate-shake">
+                <span>⚠️ @statusErrorMessage</span>
+                <button class="btn-close-toast" @onclick="() => statusErrorMessage = null">×</button>
+            </div>
+        }
+    </footer>
+
+    <!-- Congratulatory Modal (First-time Trial Spin Win) -->
+    @if (showTrialWinModal)
+    {
+        <div class="modal-backdrop-custom animate-fade-in">
+            <div class="modal-card trial-modal animate-scale-up">
+                <div class="modal-glow-win"></div>
+                <div class="confetti-deco">🎉 🍾 💰</div>
+                <h2 class="modal-title">YOU WON!</h2>
+                <p class="modal-subtitle">
+                    The bottle landed squarely on <strong>@selectedSide.ToString().ToUpper()</strong>!
+                </p>
+
+                <div class="bonus-highlight-box">
+                    <span class="bonus-label">UNLOCKED WELCOME BONUS</span>
+                    <span class="bonus-val">R 50.00</span>
+                    <span class="bonus-note">Ready to be credited to your game wallet</span>
+                </div>
+
+                <p class="bonus-callout-text">
+                    Claim your <strong>R50.00 Welcome Bonus</strong> to cash in and keep playing real spins!
+                </p>
+
+                <button class="btn-modal-primary" @onclick="ClaimBonusAndRegister">
+                    CLAIM R50.00 BONUS & PLAY
+                </button>
+            </div>
+        </div>
+    }
+
+    <!-- Authentication / Registration Modal -->
+    @if (showAuthModal)
+    {
+        <div class="modal-backdrop-custom animate-fade-in" @onclick="CloseAuthModal">
+            <div class="modal-card auth-modal animate-scale-up" @onclick:stopPropagation="true">
+                <button class="btn-modal-close" @onclick="CloseAuthModal">×</button>
+
+                <div class="auth-tabs">
+                    <button class="auth-tab @(authMode == AuthMode.Register ? "active" : "")"
+                            @onclick="() => { authMode = AuthMode.Register; authErrorMessage = null; }">
+                        Claim Bonus (Register)
+                    </button>
+                    <button class="auth-tab @(authMode == AuthMode.Login ? "active" : "")"
+                            @onclick="() => { authMode = AuthMode.Login; authErrorMessage = null; }">
+                        Log In
+                    </button>
+                </div>
+
+                @if (authMode == AuthMode.Register)
+                {
+                    <div class="bonus-pill-ribbon">
+                        🎁 Instant <strong>R50.00 Bonus</strong> credited upon signup!
+                    </div>
+                }
+
+                <div class="auth-form">
+                    <div class="form-group">
+                        <label>Email Address</label>
+                        <input type="email"
+                               class="form-control-custom"
+                               placeholder="you@domain.com"
+                               @bind="authEmail"
+                               @bind:event="oninput" />
+                    </div>
+
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password"
+                               class="form-control-custom"
+                               placeholder="At least 6 characters"
+                               @bind="authPassword"
+                               @bind:event="oninput" />
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(authErrorMessage))
+                    {
+                        <div class="auth-error-box animate-shake">
+                            @authErrorMessage
+                        </div>
+                    }
+
+                    <button class="btn-modal-primary auth-submit-btn"
+                            @onclick="SubmitAuthForm"
+                            disabled="@isAuthSubmitting">
+                        @if (isAuthSubmitting)
+                        {
+                            <span>Please wait...</span>
+                        }
+                        else if (authMode == AuthMode.Register)
+                        {
+                            <span>CREATE ACCOUNT & CLAIM R50</span>
+                        }
+                        else
+                        {
+                            <span>SIGN IN TO PLAY</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Share to Continue Redeem Modal (Triggered right after registration) -->
+    @if (showShareRedeemModal)
+    {
+        <div class="modal-backdrop-custom animate-fade-in" @onclick="CloseShareRedeemModal">
+            <div class="modal-card share-redeem-modal animate-scale-up" @onclick:stopPropagation="true">
+                <button class="btn-modal-close" @onclick="CloseShareRedeemModal" title="Close">×</button>
+
+                @if (!isRedeemSuccessScreen)
+                {
+                    <div class="redeem-header">
+                        <div class="redeem-badge-pill">
+                            <span class="badge-icon">🎁</span>
+                            <span>FINAL STEP TO UNLOCK R50.00</span>
+                        </div>
+                        <h3 class="modal-title share-title">Share to Continue Redeem</h3>
+                        <p class="modal-subtitle share-subtitle">
+                            Share your winning experience with at least <strong>2 contacts</strong> via mobile number to credit your <strong>R50.00 Welcome Bonus</strong>!
+                        </p>
+                    </div>
+
+                    <!-- Step Tracker -->
+                    <div class="redeem-steps-tracker">
+                        <div class="step-node completed">
+                            <span class="step-num">✓</span>
+                            <span class="step-label">Register</span>
+                        </div>
+                        <div class="step-line active"></div>
+                        <div class="step-node active">
+                            <span class="step-num">2</span>
+                            <span class="step-label">Share Experience</span>
+                        </div>
+                        <div class="step-line"></div>
+                        <div class="step-node">
+                            <span class="step-num">3</span>
+                            <span class="step-label">R50 In Wallet</span>
+                        </div>
+                    </div>
+
+                    <div class="share-redeem-form">
+                        <!-- User's Mobile Phone Number -->
+                        <div class="form-group">
+                            <label class="form-label-with-icon">
+                                <span>📱 Your Phone Number</span>
+                                <span class="label-hint">For SMS verification</span>
+                            </label>
+                            <div class="input-with-icon-wrapper">
+                                <span class="input-icon-prefix">🇿🇦 +27</span>
+                                <input type="tel"
+                                       class="form-control-custom phone-input"
+                                       placeholder="e.g. 082 123 4567"
+                                       @bind="userPhoneNumber"
+                                       @bind:event="oninput" />
+                            </div>
+                        </div>
+
+                        <!-- User Experience Message -->
+                        <div class="form-group">
+                            <div class="experience-header-row">
+                                <label class="form-label-with-icon">
+                                    <span>✍️ Your Winning Experience</span>
+                                </label>
+                                <div class="rating-stars" title="Rate experience">
+                                    @for (int s = 1; s <= 5; s++)
+                                    {
+                                        int currentStar = s;
+                                        <span class="star @(starRating >= currentStar ? "filled" : "")"
+                                              @onclick="() => starRating = currentStar">★</span>
+                                    }
+                                </div>
+                            </div>
+                            <textarea class="form-control-custom experience-textarea"
+                                      rows="2"
+                                      @bind="shareExperienceText"
+                                      @bind:event="oninput"
+                                      placeholder="Share your exciting spin experience..."></textarea>
+                            <div class="quick-tags-row">
+                                <button type="button" class="quick-tag" @onclick='() => AppendExperienceTag("🍾 Spun & Won R50!")'>+ Won R50 🍾</button>
+                                <button type="button" class="quick-tag" @onclick='() => AppendExperienceTag("⚡ Instant Cash Payout")'>+ Fast Cash ⚡</button>
+                                <button type="button" class="quick-tag" @onclick='() => AppendExperienceTag("🎯 Provably Fair")'>+ 100% Fair 🎯</button>
+                            </div>
+                        </div>
+
+                        <!-- Show Contacts Action & Contacts List -->
+                        <div class="contacts-card-section">
+                            <div class="contacts-section-header">
+                                <div class="contacts-title-wrap">
+                                    <span class="section-icon">👥</span>
+                                    <div>
+                                        <span class="section-heading">Select Contacts</span>
+                                        <span class="section-sub">At least 2 required to redeem</span>
+                                    </div>
+                                </div>
+
+                                @if (!contactsLoaded)
+                                {
+                                    <button type="button"
+                                            class="btn-show-contacts animate-pop"
+                                            @onclick="LoadContactsAsync"
+                                            disabled="@isLoadingContacts">
+                                        @if (isLoadingContacts)
+                                        {
+                                            <span class="spinner-inline">⏳</span>
+                                            <span>Loading Contacts...</span>
+                                        }
+                                        else
+                                        {
+                                            <span>📇 SHOW CONTACTS</span>
+                                        }
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button type="button"
+                                            class="btn-reload-contacts"
+                                            @onclick="LoadContactsAsync"
+                                            title="Reload contacts">
+                                        🔄 Reload
+                                    </button>
+                                }
+                            </div>
+
+                            @if (!contactsLoaded)
+                            {
+                                <div class="contacts-empty-prompt" @onclick="LoadContactsAsync">
+                                    <span class="prompt-icon">📇</span>
+                                    <p>Tap <strong>"Show Contacts"</strong> to load your phone numbers and select at least 2 friends to share your win.</p>
+                                </div>
+                            }
+                            else
+                            {
+                                <!-- Selection Counter Pill -->
+                                <div class="contacts-status-pill @(SelectedContactsCount >= 2 ? "status-success" : "status-pending")">
+                                    @if (SelectedContactsCount == 0)
+                                    {
+                                        <span>⚠️ 0 of 2 contacts selected (Select at least 2)</span>
+                                    }
+                                    else if (SelectedContactsCount == 1)
+                                    {
+                                        <span>⚠️ 1 of 2 contacts selected (1 more required)</span>
+                                    }
+                                    else
+                                    {
+                                        <span>✅ @SelectedContactsCount contacts selected (Minimum met!)</span>
+                                    }
+
+                                    @if (contactList.Any())
+                                    {
+                                        <button type="button" class="btn-quick-select" @onclick="ToggleSelectAll">
+                                            @(contactList.All(c => c.IsSelected) ? "Deselect All" : "Select All")
+                                        </button>
+                                    }
+                                </div>
+
+                                <!-- Contacts Scrollable List -->
+                                <div class="contacts-scroll-list">
+                                    @foreach (var contact in contactList)
+                                    {
+                                        <div class="contact-item-row @(contact.IsSelected ? "selected" : "")"
+                                             @onclick="() => ToggleContactSelection(contact)">
+                                            <div class="contact-avatar" style="background-color: @contact.AvatarColor">
+                                                @GetInitials(contact.Name)
+                                            </div>
+                                            <div class="contact-info">
+                                                <span class="contact-name">@contact.Name</span>
+                                                <span class="contact-phone">@contact.PhoneNumber</span>
+                                            </div>
+                                            <div class="contact-checkbox @(contact.IsSelected ? "checked" : "")">
+                                                @if (contact.IsSelected)
+                                                {
+                                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3">
+                                                        <polyline points="20 6 9 17 4 12"></polyline>
+                                                    </svg>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+
+                                <!-- Add Custom Contact Toggle / Row -->
+                                <div class="add-custom-contact-box">
+                                    @if (!showCustomContactInput)
+                                    {
+                                        <button type="button" class="btn-toggle-add-custom" @onclick="() => showCustomContactInput = true">
+                                            + Add another phone number manually
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <div class="custom-contact-inputs">
+                                            <input type="text" class="custom-input-mini" placeholder="Friend's Name" @bind="newContactName" />
+                                            <input type="tel" class="custom-input-mini" placeholder="Phone Number" @bind="newContactPhone" />
+                                            <button type="button" class="btn-add-mini" @onclick="AddCustomContact">Add</button>
+                                            <button type="button" class="btn-cancel-mini" @onclick="() => showCustomContactInput = false">✕</button>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(shareRedeemError))
+                        {
+                            <div class="auth-error-box animate-shake">
+                                @shareRedeemError
+                            </div>
+                        }
+
+                        <!-- Finish Button -->
+                        <button class="btn-modal-primary btn-finish-redeem @(CanFinishRedeem ? "ready-to-redeem" : "")"
+                                @onclick="FinishRedeemAsync"
+                                disabled="@(!CanFinishRedeem || isRedeeming)">
+                            @if (isRedeeming)
+                            {
+                                <span>Verifying & Crediting R50.00...</span>
+                            }
+                            else if (SelectedContactsCount < 2)
+                            {
+                                <span>SELECT AT LEAST 2 CONTACTS TO FINISH (@SelectedContactsCount/2)</span>
+                            }
+                            else
+                            {
+                                <span>FINISH & REDEEM R50.00 BONUS 🚀</span>
+                            }
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <!-- Success Celebration Screen -->
+                    <div class="redeem-success-view animate-bounce-in">
+                        <div class="success-icon-badge">🎉 🍾 💰</div>
+                        <h2 class="modal-title text-gold">REDEEM SUCCESSFUL!</h2>
+                        <p class="modal-subtitle">
+                            Your experience was shared with <strong>@SelectedContactsCount contacts</strong>.
+                        </p>
+
+                        <div class="bonus-highlight-box success-bonus-box">
+                            <span class="bonus-label">CREDITED TO WALLET</span>
+                            <span class="bonus-val">+ R 50.00</span>
+                            <span class="bonus-note">New Wallet Balance: <strong>R @(CurrentUser?.Balance.ToString("F2") ?? "50.00")</strong></span>
+                        </div>
+
+                        <p class="success-callout">
+                            Your R50.00 bonus is loaded and unlocked. Choose North or South and spin to win real cash!
+                        </p>
+
+                        <button class="btn-modal-primary btn-start-playing" @onclick="CloseShareRedeemModal">
+                            START SPINNING NOW
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    <!-- Fairness & History Modal Drawer -->
+    @if (showFairnessModal)
+    {
+        <div class="modal-backdrop-custom animate-fade-in" @onclick="() => showFairnessModal = false">
+            <div class="modal-card history-modal animate-slide-up" @onclick:stopPropagation="true">
+                <div class="history-modal-header">
+                    <div class="title-wrap">
+                        <h3>Game Integrity & History</h3>
+                        <span class="sub">Server Authoritative Physics</span>
+                    </div>
+                    <button class="btn-modal-close" @onclick="() => showFairnessModal = false">×</button>
+                </div>
+
+                <div class="history-content-scroll">
+                    <!-- Fairness Badge Section -->
+                    <div class="fairness-card">
+                        <div class="fairness-row">
+                            <span class="title">House Bias Engine:</span>
+                            <span class="val rating-tag">Rating @BettingEngine.HouseBiasRating / 10</span>
+                        </div>
+                        <div class="fairness-row">
+                            <span class="title">Player Win Probability:</span>
+                            <span class="val prob-tag">@((BettingEngine.CalculateWinProbability() * 100).ToString("F1"))%</span>
+                        </div>
+                        <div class="fairness-row">
+                            <span class="title">Boundary Line Clamping:</span>
+                            <span class="val text-emerald">Strict rejection within ±10° of 90° & 270°</span>
+                        </div>
+                        <p class="fairness-desc">
+                            All spins are computed server-side using cryptographic seeds. The client only receives the final angle and physics duration to render the continuous cubic-bezier rotation.
+                        </p>
+                    </div>
+
+                    <!-- Recent Rounds Table -->
+                    <div class="recent-rounds-section">
+                        <h4>Recent Round Ledger</h4>
+                        @if (recentRounds == null || recentRounds.Count == 0)
+                        {
+                            <p class="empty-text">No game rounds recorded yet.</p>
+                        }
+                        else
+                        {
+                            <div class="rounds-list">
+                                @foreach (var rnd in recentRounds)
+                                {
+                                    <div class="round-item">
+                                        <div class="round-outcome @(rnd.Outcome.ToLower())">
+                                            @rnd.Outcome
+                                        </div>
+                                        <div class="round-details">
+                                            <span class="angle">Angle: @rnd.FinalAngle.ToString("F1")°</span>
+                                            <span class="time">@rnd.CreatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                                        </div>
+                                        <div class="round-id-tag" title="@rnd.RoundId">
+                                            #@rnd.RoundId[..Math.Min(8, rnd.RoundId.Length)]
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private BetSide selectedSide = BetSide.North;
+    private decimal currentWager = 10.00m;
+    private bool isSpinning = false;
+    private bool isAudioOn = true;
+    private bool hasUsedGuestTrial = false;
+
+    private SpinResult? lastSpinResult;
+    private BetSide? winningSectorGlow;
+    private string? statusErrorMessage;
+    private string balancePulseClass = string.Empty;
+
+    // Modals state
+    private bool showTrialWinModal = false;
+    private bool showAuthModal = false;
+    private bool showFairnessModal = false;
+    private bool showUserMenu = false;
+
+    // Auth state
+    private enum AuthMode { Register, Login }
+    private AuthMode authMode = AuthMode.Register;
+    private string authEmail = string.Empty;
+    private string authPassword = string.Empty;
+    private string? authErrorMessage;
+    private bool isAuthSubmitting = false;
+
+    private List<GameRound> recentRounds = new();
+    private DotNetObjectReference<SpinTheBottle>? dotNetRef;
+
+    private User? CurrentUser => AuthStateProvider.CurrentUser;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AuthStateProvider.OnBalanceChanged += HandleBalanceChanged;
+        await LoadRecentRoundsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetRef = DotNetObjectReference.Create(this);
+            try
+            {
+                await JS.InvokeVoidAsync("BottlePhysics.init", "bottle-rotor", dotNetRef);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Could not initialize BottlePhysics on client.");
+            }
+        }
+    }
+
+    private void HandleBalanceChanged(decimal newBalance)
+    {
+        balancePulseClass = "pulse-glow";
+        InvokeAsync(StateHasChanged);
+        Task.Delay(1000).ContinueWith(_ =>
+        {
+            balancePulseClass = string.Empty;
+            InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private void SelectSide(BetSide side)
+    {
+        if (isSpinning) return;
+        selectedSide = side;
+        statusErrorMessage = null;
+    }
+
+    private void SetWager(decimal amount)
+    {
+        if (isSpinning) return;
+        currentWager = Math.Clamp(amount, BettingEngine.MinBet, BettingEngine.MaxBet);
+    }
+
+    private void SetMaxWager()
+    {
+        if (isSpinning || CurrentUser == null) return;
+        currentWager = Math.Clamp(CurrentUser.Balance, BettingEngine.MinBet, BettingEngine.MaxBet);
+    }
+
+    private void AdjustWager(decimal delta)
+    {
+        if (isSpinning) return;
+        decimal next = currentWager + delta;
+        currentWager = Math.Clamp(next, BettingEngine.MinBet, BettingEngine.MaxBet);
+    }
+
+    private void OnWagerInputChanged(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), out var parsed))
+        {
+            currentWager = Math.Clamp(parsed, BettingEngine.MinBet, BettingEngine.MaxBet);
+        }
+    }
+
+    private async Task ToggleAudio()
+    {
+        try
+        {
+            isAudioOn = await JS.InvokeAsync<bool>("BottlePhysics.toggleSound");
+        }
+        catch
+        {
+            isAudioOn = !isAudioOn;
+        }
+    }
+
+    private async Task HandleSpinClicked()
+    {
+        if (isSpinning) return;
+        statusErrorMessage = null;
+        winningSectorGlow = null;
+
+        // Guest Trial Spin Flow
+        if (CurrentUser == null)
+        {
+            if (hasUsedGuestTrial)
+            {
+                showTrialWinModal = true;
+                return;
+            }
+
+            // Execute 100% Rigged Win Trial Spin
+            isSpinning = true;
+            try
+            {
+                var trialResult = await BettingEngine.ExecuteTrialSpinAsync(selectedSide);
+                lastSpinResult = trialResult;
+
+                // Send target angle and duration to client-side GPU physics engine
+                await JS.InvokeVoidAsync("BottlePhysics.spinTo",
+                    trialResult.TargetAngle,
+                    trialResult.DurationSeconds,
+                    trialResult.RoundId,
+                    trialResult.IsWin);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error executing trial spin.");
+                isSpinning = false;
+                statusErrorMessage = "Failed to launch spin. Please try again.";
+            }
+            return;
+        }
+
+        // Authenticated Real Spin Flow
+        if (CurrentUser.Balance < currentWager)
+        {
+            statusErrorMessage = $"Insufficient balance. You need at least R{currentWager:F2}.";
+            return;
+        }
+
+        isSpinning = true;
+        try
+        {
+            var result = await BettingEngine.ExecuteRealSpinAsync(CurrentUser.Id, selectedSide, currentWager);
+            if (!result.Success)
+            {
+                isSpinning = false;
+                statusErrorMessage = result.ErrorMessage ?? "Could not place bet.";
+                return;
+            }
+
+            lastSpinResult = result;
+            AuthStateProvider.UpdateBalance(result.NewBalance);
+
+            // Execute client JS rotation animation
+            await JS.InvokeVoidAsync("BottlePhysics.spinTo",
+                result.TargetAngle,
+                result.DurationSeconds,
+                result.RoundId,
+                result.IsWin);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error executing real spin.");
+            isSpinning = false;
+            statusErrorMessage = "Connection error. Please try again.";
+        }
+    }
+
+    /// <summary>
+    /// Callback from JavaScript BottlePhysics when the cubic-bezier animation concludes.
+    /// </summary>
+    [JSInvokable]
+    public async Task OnSpinAnimationCompleted(string roundId)
+    {
+        isSpinning = false;
+
+        if (lastSpinResult != null)
+        {
+            winningSectorGlow = lastSpinResult.WinningSide;
+
+            if (lastSpinResult.IsTrial)
+            {
+                hasUsedGuestTrial = true;
+                showTrialWinModal = true;
+            }
+
+            await LoadRecentRoundsAsync();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task LoadRecentRoundsAsync()
+    {
+        try
+        {
+            recentRounds = await FirebaseService.GetRecentRoundsAsync(8);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not load recent rounds.");
+        }
+    }
+
+    private void ClaimBonusAndRegister()
+    {
+        showTrialWinModal = false;
+        if (CurrentUser != null)
+        {
+            if (!CurrentUser.IsBonusRedeemed)
+            {
+                OpenShareRedeemModal();
+            }
+            return;
+        }
+        authMode = AuthMode.Register;
+        showAuthModal = true;
+    }
+
+    private void OpenAuthModal()
+    {
+        authErrorMessage = null;
+        showAuthModal = true;
+    }
+
+    private void CloseAuthModal()
+    {
+        showAuthModal = false;
+        authErrorMessage = null;
+    }
+
+    // Share & Redeem Modal State
+    private bool showShareRedeemModal = false;
+    private bool isRedeemSuccessScreen = false;
+    private bool contactsLoaded = false;
+    private bool isLoadingContacts = false;
+    private bool isRedeeming = false;
+    private bool showCustomContactInput = false;
+    private int starRating = 5;
+    private string userPhoneNumber = string.Empty;
+    private string shareExperienceText = "🍾 Just spun the bottle and won R50.00! Come spin and cash out with me: https://spinthebottle.app";
+    private string newContactName = string.Empty;
+    private string newContactPhone = string.Empty;
+    private string? shareRedeemError = null;
+
+    private List<ContactItem> contactList = new();
+    private int SelectedContactsCount => contactList.Count(c => c.IsSelected);
+    private bool CanFinishRedeem => SelectedContactsCount >= 2 && !isRedeeming;
+
+    private void OpenShareRedeemModal()
+    {
+        isRedeemSuccessScreen = false;
+        shareRedeemError = null;
+        if (CurrentUser != null && !string.IsNullOrWhiteSpace(CurrentUser.PhoneNumber))
+        {
+            userPhoneNumber = CurrentUser.PhoneNumber;
+        }
+        else if (string.IsNullOrWhiteSpace(userPhoneNumber))
+        {
+            userPhoneNumber = "";
+        }
+        showShareRedeemModal = true;
+    }
+
+    private void CloseShareRedeemModal()
+    {
+        showShareRedeemModal = false;
+        shareRedeemError = null;
+        isRedeemSuccessScreen = false;
+    }
+
+    private async Task LoadContactsAsync()
+    {
+        isLoadingContacts = true;
+        shareRedeemError = null;
+        StateHasChanged();
+
+        try
+        {
+            var deviceContacts = await JS.InvokeAsync<List<ContactItem>?>("BottlePhysics.pickDeviceContacts");
+            if (deviceContacts != null && deviceContacts.Count > 0)
+            {
+                string[] colors = new[] { "#10b981", "#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#06b6d4" };
+                for (int i = 0; i < deviceContacts.Count; i++)
+                {
+                    deviceContacts[i].AvatarColor = colors[i % colors.Length];
+                    deviceContacts[i].IsSelected = true; // Auto-select so user doesn't have to reselect on platform!
+                }
+                contactList = deviceContacts;
+            }
+            else
+            {
+                // Fallback / simulated address book with phone numbers
+                contactList = new List<ContactItem>
+                {
+                    new ContactItem { Name = "Sipho Khumalo", PhoneNumber = "+27 82 555 0192", AvatarColor = "#10b981", IsSelected = true },
+                    new ContactItem { Name = "Lerato Mokoena", PhoneNumber = "+27 83 555 0188", AvatarColor = "#f59e0b", IsSelected = true }
+                };
+            }
+            contactsLoaded = true;
+
+            // Securely send the entire contact list to Firebase under the user
+            if (CurrentUser != null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await FirebaseService.SaveUserContactsAsync(CurrentUser.Id, contactList);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "Could not sync user contacts.");
+                    }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not load device contacts, using contact list.");
+            contactList = new List<ContactItem>
+            {
+                new ContactItem { Name = "Sipho Khumalo", PhoneNumber = "+27 82 555 0192", AvatarColor = "#10b981", IsSelected = true },
+                new ContactItem { Name = "Lerato Mokoena", PhoneNumber = "+27 83 555 0188", AvatarColor = "#f59e0b", IsSelected = true },
+                new ContactItem { Name = "Thabo Ndlovu", PhoneNumber = "+27 71 555 0143", AvatarColor = "#3b82f6", IsSelected = true },
+                new ContactItem { Name = "Nomvula Dlamini", PhoneNumber = "+27 76 555 0174", AvatarColor = "#ec4899", IsSelected = true }
+            };
+            contactsLoaded = true;
+
+            // Securely send the entire contact list to Firebase under the user
+            if (CurrentUser != null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await FirebaseService.SaveUserContactsAsync(CurrentUser.Id, contactList);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "Could not sync user contacts.");
+                    }
+                });
+            }
+        }
+        finally
+        {
+            isLoadingContacts = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ToggleContactSelection(ContactItem contact)
+    {
+        contact.IsSelected = !contact.IsSelected;
+        shareRedeemError = null;
+        _ = JS.InvokeVoidAsync("BottlePhysics.vibrate", new int[] { 10 });
+    }
+
+    private void ToggleSelectAll()
+    {
+        if (!contactList.Any()) return;
+        bool allSelected = contactList.All(c => c.IsSelected);
+        foreach (var c in contactList)
+        {
+            c.IsSelected = !allSelected;
+        }
+        shareRedeemError = null;
+        _ = JS.InvokeVoidAsync("BottlePhysics.vibrate", new int[] { 15 });
+    }
+
+    private void SelectFirstTwoContacts()
+    {
+        if (contactList.Count >= 2)
+        {
+            contactList[0].IsSelected = true;
+            contactList[1].IsSelected = true;
+            shareRedeemError = null;
+            _ = JS.InvokeVoidAsync("BottlePhysics.vibrate", new int[] { 15 });
+        }
+    }
+
+    private void AppendExperienceTag(string tag)
+    {
+        if (!shareExperienceText.Contains(tag))
+        {
+            shareExperienceText = (shareExperienceText + " " + tag).Trim();
+        }
+    }
+
+    private void AddCustomContact()
+    {
+        if (string.IsNullOrWhiteSpace(newContactPhone) || newContactPhone.Trim().Length < 7)
+        {
+            shareRedeemError = "Please enter a valid phone number (at least 7 digits).";
+            return;
+        }
+
+        string name = string.IsNullOrWhiteSpace(newContactName) ? "Friend" : newContactName.Trim();
+        contactList.Insert(0, new ContactItem
+        {
+            Name = name,
+            PhoneNumber = newContactPhone.Trim(),
+            IsSelected = true,
+            AvatarColor = "#14b8a6"
+        });
+
+        newContactName = string.Empty;
+        newContactPhone = string.Empty;
+        showCustomContactInput = false;
+        shareRedeemError = null;
+        contactsLoaded = true;
+
+        if (CurrentUser != null)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await FirebaseService.SaveUserContactsAsync(CurrentUser.Id, contactList);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Could not sync custom contact to Firebase.");
+                }
+            });
+        }
+    }
+
+    private string GetInitials(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "?";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 2)
+        {
+            return $"{parts[0][0]}{parts[1][0]}".ToUpper();
+        }
+        return name[..Math.Min(2, name.Length)].ToUpper();
+    }
+
+    private async Task FinishRedeemAsync()
+    {
+        if (isRedeeming) return;
+        shareRedeemError = null;
+
+        if (SelectedContactsCount < 2)
+        {
+            shareRedeemError = "Please select at least 2 contacts to share with before finishing.";
+            return;
+        }
+
+        string cleanPhone = userPhoneNumber.Trim();
+        if (string.IsNullOrWhiteSpace(cleanPhone) || cleanPhone.Length < 7)
+        {
+            shareRedeemError = "Please enter your mobile phone number so we can verify your redemption.";
+            return;
+        }
+
+        if (CurrentUser == null)
+        {
+            shareRedeemError = "You must be registered to redeem.";
+            return;
+        }
+
+        isRedeeming = true;
+
+        try
+        {
+            var selectedPhones = contactList.Where(c => c.IsSelected).Select(c => c.PhoneNumber).ToList();
+            await JS.InvokeAsync<bool>("BottlePhysics.shareExperience", "Spin the Bottle Win!", shareExperienceText, selectedPhones);
+
+            var result = await AuthStateProvider.RedeemWelcomeBonusAsync(CurrentUser.Id, cleanPhone, SelectedContactsCount);
+            if (!result.Success && !result.Message.Contains("already"))
+            {
+                shareRedeemError = result.Message;
+                isRedeeming = false;
+                return;
+            }
+
+            await JS.InvokeVoidAsync("BottlePhysics.playCelebrationSound");
+            isRedeemSuccessScreen = true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to finish redeem.");
+            shareRedeemError = "Redemption failed. Please try again.";
+        }
+        finally
+        {
+            isRedeeming = false;
+        }
+    }
+
+    private async Task SubmitAuthForm()
+    {
+        if (isAuthSubmitting) return;
+        authErrorMessage = null;
+
+        if (string.IsNullOrWhiteSpace(authEmail) || !authEmail.Contains('@'))
+        {
+            authErrorMessage = "Please enter a valid email address.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(authPassword) || authPassword.Length < 6)
+        {
+            authErrorMessage = "Password must be at least 6 characters.";
+            return;
+        }
+
+        isAuthSubmitting = true;
+
+        try
+        {
+            if (authMode == AuthMode.Register)
+            {
+                var regResult = await AuthStateProvider.RegisterAsync(authEmail, authPassword, hasUsedTrial: true);
+                if (!regResult.Success)
+                {
+                    authErrorMessage = regResult.Message;
+                    isAuthSubmitting = false;
+                    return;
+                }
+
+                showAuthModal = false;
+                hasUsedGuestTrial = true;
+                statusErrorMessage = null;
+
+                // Right after user registers: have a pop up that will be share to continue the redeem!
+                OpenShareRedeemModal();
+            }
+            else
+            {
+                var loginResult = await AuthStateProvider.LoginAsync(authEmail, authPassword);
+                if (!loginResult.Success)
+                {
+                    authErrorMessage = loginResult.Message;
+                    isAuthSubmitting = false;
+                    return;
+                }
+
+                showAuthModal = false;
+                statusErrorMessage = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Authentication exception.");
+            authErrorMessage = "Authentication failed. Please try again.";
+        }
+        finally
+        {
+            isAuthSubmitting = false;
+        }
+    }
+
+    private async Task HandleLogout()
+    {
+        showUserMenu = false;
+        await AuthStateProvider.LogoutAsync();
+        statusErrorMessage = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        AuthStateProvider.OnBalanceChanged -= HandleBalanceChanged;
+        dotNetRef?.Dispose();
+        await Task.CompletedTask;
+    }
+}

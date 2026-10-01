@@ -1,0 +1,62 @@
+.app-viewport-wrapper {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: radial-gradient(circle at 50% 20%, #151828 0%, #090a10 70%, #030406 100%);
+    overflow-x: hidden;
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #f1f5f9;
+}
+
+.app-mobile-container {
+    width: 100%;
+    max-width: 440px;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    background-color: #0b0d14;
+    box-shadow: 0 0 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(99, 102, 241, 0.08);
+    position: relative;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 480px) {
+    .app-mobile-container {
+        max-width: 100%;
+        box-shadow: none;
+    }
+}
+
+#blazor-error-ui {
+    color-scheme: dark;
+    background: #ef4444;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.4);
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 10000;
+    color: white;
+    font-size: 0.875rem;
+}
+
+#blazor-error-ui .reload {
+    color: #fef08a;
+    text-decoration: underline;
+    margin-left: 0.5rem;
+}
+
+#blazor-error-ui .dismiss {
+    cursor: pointer;
+    position: absolute;
+    right: 0.75rem;
+    top: 0.5rem;
+}
